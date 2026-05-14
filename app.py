@@ -28,3 +28,6 @@ def compare_cv(prompt=compare_cv_job):
     response = agent.invoke({'messages': [message]})
 
     print(response['messages'][-1].content)
+
+
+    
