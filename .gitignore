@@ -2,3 +2,5 @@
 /data
 /.env
 /linkedin_jobs_scout.csv
+/final_ranked_jobs.csv
+/test.py
