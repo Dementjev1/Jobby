@@ -42,14 +42,15 @@ def scrape_linkedin_jobs(position_name):
 
             page.wait_for_timeout(2000)  # Wait for 3 seconds to ensure the page has loaded after login
 
+            link_ = "https://www.linkedin.com/jobs/"
+
+            page.goto(link_)
+            page.wait_for_timeout(2000)
+
             response = page.query_elements(JOB_SEARCH_QUERY)
             response.search_input.type(position_name, delay=75)
             page.keyboard.press("Enter")
             page.wait_for_timeout(1000)
-
-            page.get_by_role("radio", name="Filter by Jobs").click()
-
-            page.wait_for_timeout(1000)  # Wait for 3 seconds to ensure the page has loaded after clicking on Jobs
 
             limit = 5
 
@@ -138,5 +139,5 @@ def scrape_linkedin_jobs(position_name):
 
 
 if __name__ == "__main__":
-    position = "Financial Analyst"
+    position = "Human resources"
     scrape_linkedin_jobs(position)
