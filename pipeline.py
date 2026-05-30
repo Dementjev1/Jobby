@@ -23,9 +23,8 @@ load_dotenv()
 
 # Define the function as an official LangChain tool
 class JobPipeline:
-    def __init__(self, cv_path: str, search_keyword: str):
-        loader = PyPDFLoader(cv_path)
-        self.cv_doc = "\n".join([doc.page_content for doc in loader.load()])
+    def __init__(self, cv_text: str, search_keyword: str):
+        self.cv_doc = cv_text
         self.search_keyword = search_keyword
         self.intermediate_results = None
         self.comparison_results = None
@@ -59,9 +58,12 @@ class JobPipeline:
 
         job_list = []
 
-        with sync_playwright() as p, p.chromium.launch(headless=False) as browser:
-                page = agentql.wrap(browser.new_page())
-                page.goto(self.url)
+        with sync_playwright() as p, p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"]) as browser:
+                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                page = context.new_page()
+
+                # Encode your frontend's keyword safely for a URL link
+                encoded_keyword = self.search_keyword.replace(" ", "%20")
 
                 try:
                     #Logging into linkedin account
@@ -217,3 +219,34 @@ class JobPipeline:
             evaluation = self.evaluate_job_fit(agent, row)
             print(f"Evaluation for {row.job_title}:\n{evaluation}\n{'-'*50}\n")
         
+
+
+def job_scrapper(self):
+        with sync_playwright() as p:
+            # We add a custom User-Agent so we look like a standard desktop browser
+            browser = p.chromium.launch(
+                headless=True,  # Keeps it lightweight for your Pi
+                args=["--disable-blink-features=AutomationControlled"]
+            )
+            
+            # Create a clean context with standard browser headers
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+
+            # Encode your frontend's keyword safely for a URL link
+            encoded_keyword = self.search_keyword.replace(" ", "%20")
+            
+            # 🚀 THE BYPASS: Navigate straight to the public guest search stream
+            # geoId=102884592 is the specific code for Estonia!
+            guest_jobs_url = f"https://www.linkedin.com/jobs/search/?keywords={encoded_keyword}&location=Estonia&geoId=102884592"
+            
+            print(f"🌐 Navigating to Guest Feed: {guest_jobs_url}")
+            page.goto(guest_jobs_url)
+            page.wait_for_load_state("networkidle")
+
+            # --- Your existing AgentQL / parsing logic starts here ---
+            # Now you just pull the jobs container from the public page,
+            # completely bypassing any risk to your personal account!
+

@@ -7,3 +7,4 @@ langsmith
 agentql
 playwright
 pandas
+fastapi
