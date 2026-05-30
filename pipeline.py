@@ -23,9 +23,8 @@ load_dotenv()
 
 # Define the function as an official LangChain tool
 class JobPipeline:
-    def __init__(self, cv_path: str, search_keyword: str):
-        loader = PyPDFLoader(cv_path)
-        self.cv_doc = "\n".join([doc.page_content for doc in loader.load()])
+    def __init__(self, cv_text: str, search_keyword: str):
+        self.cv_doc = cv_text
         self.search_keyword = search_keyword
         self.intermediate_results = None
         self.comparison_results = None
@@ -59,114 +58,121 @@ class JobPipeline:
 
         job_list = []
 
-        with sync_playwright() as p, p.chromium.launch(headless=False) as browser:
-                page = agentql.wrap(browser.new_page())
-                page.goto(self.url)
+        with sync_playwright() as p, p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"]) as browser:
+                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                page = context.new_page()
 
-                try:
-                    #Logging into linkedin account
-                    response = page.query_elements(self.LOGGING_QUERY)
-                    response.email_or_username.type("nikita.dementjev.vv@gmail.com", delay=75)
-                    response.password.type("Thenbhd2200", delay=75)
-                    response.login_button.click()
+                # Encode your frontend's keyword safely for a URL link
+                encoded_keyword = self.search_keyword.replace(" ", "%20")
 
-                    page.wait_for_timeout(2000)  # Wait for 3 seconds to ensure the page has loaded after login
+                guest_jobs_url = f"https://www.linkedin.com/jobs/search/?keywords={encoded_keyword}&location=Estonia&geoId=102884592"
+            
+                print(f"🌐 Navigating to Guest Feed: {guest_jobs_url}")
+                page.goto(guest_jobs_url)
 
-                    link_ = "https://www.linkedin.com/jobs/"
-                    page.goto(link_)
-                    page.wait_for_timeout(2000)
+                dimensions = page.evaluate("""() => {
+                    return {
+                        width: window.innerWidth,
+                        height: window.innerHeight
+                    }
+                }""")
+                
+                # 2. Calculate the exact bottom-right coordinates
+                # Subtracting 1 pixel to stay safely inside the clickable window boundary
+                bottom_right_x = dimensions["width"] - 1
+                bottom_right_y = dimensions["height"] - 1
+                
+                print(f"Clicking bottom-right corner at coordinates: ({bottom_right_x}, {bottom_right_y})")
+                
+                # 3. Direct the hardware mouse to click that exact location
+                page.mouse.click(bottom_right_x, bottom_right_y)
+                page.wait_for_timeout(2000)  # Wait for 2 seconds to ensure the page has loaded after the click
 
-                    #Searching for the job using position keyword
-                    response = page.query_elements(self.JOB_SEARCH_QUERY)
-                    response.search_input.type(self.search_keyword, delay=75)
-                    page.keyboard.press("Enter")
-                    page.wait_for_timeout(1000)
+            # Maximum number of jobs to scrape
+                limit = 4
 
-                    # Maximum number of jobs to scrape
-                    limit = 4
+                for _ in range(4):
+                    page.mouse.wheel(0, 1000)
+                    page.wait_for_timeout(500)
 
-                    for _ in range(4):
-                        page.mouse.wheel(0, 1000)
-                        page.wait_for_timeout(500)
+                # 1. Target the main column
+                column = page.get_by_test_id("lazy-column")
 
-                    # 1. Target the main column
-                    column = page.get_by_test_id("lazy-column")
+                job_cards = column.locator('div[role="button"][componentkey^="job-card"]').all()
 
-                    job_cards = column.locator('div[role="button"][componentkey^="job-card"]').all()
+                count = 0
 
-                    count = 0
+                for card in job_cards:
+                    if count >= limit:
+                        break
 
-                    for card in job_cards:
-                        if count >= limit:
-                            break
-
-                        try:
-                            raw_text = card.inner_text().strip()
-                            
-                            # Take the first line (usually the title)
-                            if not raw_text or raw_text.isdigit() or len(raw_text) < 3:
-                                continue
-                                
-                            # LinkedIn titles are usually the first line
-                            lines = raw_text.split('\n')
-                            raw_title = lines[0]
-                            
-                            # Clean "Verified job" and whitespace
-                            clean_title = re.sub(r"\s*\(Verified job\)", "", raw_title, flags=re.IGNORECASE).strip()
-
-                            card.click(force=True)
-                            # 4. CLICK the card to update the side panel
-                            # We use force=True because LinkedIn's div-soup often overlaps
-                            link_element = page.get_by_role("link", name=clean_title)
-                            link_element.first.click(force=True)
-                            page.wait_for_timeout(2000) # Wait for description to load
-
-                            text_boxes = page.get_by_test_id("expandable-text-box").all()
-
-                            for box in text_boxes:
-                                try:
-                                    # 2. Look for the "see more" or "...more" button inside the box
-                                    # LinkedIn often uses a button or a span with the text "...more" or "see more"
-                                    more_button = box.get_by_role("button", name=re.compile(r"more", re.I))
-                                    
-                                    # 3. If it's visible, click it
-                                    if more_button.is_visible():
-                                        more_button.click()
-                                        # Small wait for the animation/text to expand
-                                        page.wait_for_timeout(500)
-                                except Exception:
-                                    # If no button is found, the text was already full—just move on
-                                    pass
-                            
-                            job_desc = text_boxes[0].inner_text() if len(text_boxes) >= 1 else "N/A"
-                            comp_info = text_boxes[1].inner_text() if len(text_boxes) >= 2 else "N/A"
-
-                            # 6. Store it
-                            job_list.append({
-                                "job_title": clean_title,
-                                "job_description": job_desc,
-                                "company_info": comp_info
-                            })
-                            
-                            print(f"✅ Scraped [{count+1}]: {clean_title}")
-                            count += 1
-
-                            page.go_back()
-                            page.wait_for_timeout(2000)
-
-                        except Exception as e:
-                            print(f"⚠️ Skipping a card due to error: {e}")
+                    try:
+                        raw_text = card.inner_text().strip()
+                        
+                        # Take the first line (usually the title)
+                        if not raw_text or raw_text.isdigit() or len(raw_text) < 3:
                             continue
+                            
+                        # LinkedIn titles are usually the first line
+                        lines = raw_text.split('\n')
+                        raw_title = lines[0]
+                        
+                        # Clean "Verified job" and whitespace
+                        clean_title = re.sub(r"\s*\(Verified job\)", "", raw_title, flags=re.IGNORECASE).strip()
+
+                        card.click(force=True)
+                        # 4. CLICK the card to update the side panel
+                        # We use force=True because LinkedIn's div-soup often overlaps
+                        link_element = page.get_by_role("link", name=clean_title)
+                        link_element.first.click(force=True)
+                        page.wait_for_timeout(2000) # Wait for description to load
+
+                        text_boxes = page.get_by_test_id("expandable-text-box").all()
+
+                        for box in text_boxes:
+                            try:
+                                # 2. Look for the "see more" or "...more" button inside the box
+                                # LinkedIn often uses a button or a span with the text "...more" or "see more"
+                                more_button = box.get_by_role("button", name=re.compile(r"more", re.I))
+                                
+                                # 3. If it's visible, click it
+                                if more_button.is_visible():
+                                    more_button.click()
+                                    # Small wait for the animation/text to expand
+                                    page.wait_for_timeout(500)
+                            except Exception:
+                                # If no button is found, the text was already full—just move on
+                                pass
+                        
+                        job_desc = text_boxes[0].inner_text() if len(text_boxes) >= 1 else "N/A"
+                        comp_info = text_boxes[1].inner_text() if len(text_boxes) >= 2 else "N/A"
+
+                        # 6. Store it
+                        job_list.append({
+                            "job_title": clean_title,
+                            "job_description": job_desc,
+                            "company_info": comp_info
+                        })
+                        
+                        print(f"✅ Scraped [{count+1}]: {clean_title}")
+                        count += 1
+
+                        page.go_back()
+                        page.wait_for_timeout(2000)
+
+                    except Exception as e:
+                        print(f"⚠️ Skipping a card due to error: {e}")
+                        continue
                     
-                    # Convert your list of dictionaries to a DataFrame
-                    df = pd.DataFrame(job_list)
-                    df.to_csv("linkedin_jobs_scout.csv", index=False, encoding='utf-8')
-                    print("✅ Exported to linkedin_jobs_scout.csv")
+                #     # Convert your list of dictionaries to a DataFrame
+                #     df = pd.DataFrame(job_list)
+                #     df.to_csv("linkedin_jobs_scout.csv", index=False, encoding='utf-8')
+                #     print("✅ Exported to linkedin_jobs_scout.csv")
 
-                    self.intermediate_results = df
+                #     self.intermediate_results = df
 
-                except Exception as e:
-                        print(f"An error occurred: {e}")
+                # except Exception as e:
+                #         print(f"An error occurred: {e}")
 
     def evaluate_job_fit(self,agent, row) -> str:
         """
@@ -204,16 +210,49 @@ class JobPipeline:
     def run_pipeline(self):
         
         self.job_scrapper()
-
-        llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.8)
-
-        # 2. Spawn the sub-agent specialized in matching
-        agent = create_agent(
-            model=llm,
-            system_prompt=self.cv_doc
-        )
-
-        for row in self.intermediate_results.itertuples():
-            evaluation = self.evaluate_job_fit(agent, row)
-            print(f"Evaluation for {row.job_title}:\n{evaluation}\n{'-'*50}\n")
         
+        
+
+        # llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.8)
+
+        # # 2. Spawn the sub-agent specialized in matching
+        # agent = create_agent(
+        #     model=llm,
+        #     system_prompt=self.cv_doc
+        # )
+
+        # for row in self.intermediate_results.itertuples():
+        #     evaluation = self.evaluate_job_fit(agent, row)
+        #     print(f"Evaluation for {row.job_title}:\n{evaluation}\n{'-'*50}\n")
+        
+
+
+def job_scrapper(self):
+        with sync_playwright() as p:
+            # We add a custom User-Agent so we look like a standard desktop browser
+            browser = p.chromium.launch(
+                headless=True,  # Keeps it lightweight for your Pi
+                args=["--disable-blink-features=AutomationControlled"]
+            )
+            
+            # Create a clean context with standard browser headers
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+
+            # Encode your frontend's keyword safely for a URL link
+            encoded_keyword = self.search_keyword.replace(" ", "%20")
+            
+            # 🚀 THE BYPASS: Navigate straight to the public guest search stream
+            # geoId=102884592 is the specific code for Estonia!
+            guest_jobs_url = f"https://www.linkedin.com/jobs/search/?keywords={encoded_keyword}&location=Estonia&geoId=102884592"
+            
+            print(f"🌐 Navigating to Guest Feed: {guest_jobs_url}")
+            page.goto(guest_jobs_url)
+            page.wait_for_load_state("networkidle")
+
+            # --- Your existing AgentQL / parsing logic starts here ---
+            # Now you just pull the jobs container from the public page,
+            # completely bypassing any risk to your personal account!
+
