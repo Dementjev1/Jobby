@@ -58,12 +58,9 @@ class JobPipeline:
 
         job_list = []
 
-        with sync_playwright() as p, p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"]) as browser:
-                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-                page = context.new_page()
-
-                # Encode your frontend's keyword safely for a URL link
-                encoded_keyword = self.search_keyword.replace(" ", "%20")
+        with sync_playwright() as p, p.chromium.launch(headless=False,) as browser:
+                page = agentql.wrap(browser.new_page())
+                page.goto(self.url)
 
                 try:
                     #Logging into linkedin account
