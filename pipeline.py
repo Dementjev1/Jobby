@@ -49,7 +49,7 @@ class JobPipeline:
         def rdm():
             return random.uniform(1.5, 3) *1000
 
-        with sync_playwright() as p, p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]) as browser:
+        with sync_playwright() as p, p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]) as browser:
                 context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                                       locale="en-US")
                 page = context.new_page()
@@ -240,6 +240,15 @@ class JobPipeline:
                 # Extract metadata from the AI payload with safe fallbacks
                 extracted_title = evaluation_dict.get("job_title", "Unknown Position")
                 extracted_company = evaluation_dict.get("company_name", "Unknown Company")
+
+
+                existing_record = db.query(JobEvaluationModel).filter(
+                    JobEvaluationModel.job_title == extracted_title,
+                    JobEvaluationModel.company_name == extracted_company).first()
+                
+                if existing_record:
+                    print(f"⏭️ [SKIP] '{extracted_title}' at '{extracted_company}' already exists in database. Skipping duplicate entry.")
+                    return False
                 
                 # Build the table row object
                 new_record = JobEvaluationModel(

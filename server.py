@@ -1,15 +1,39 @@
 import os
-import time
-from fastapi import FastAPI, UploadFile, Form, HTTPException
+import io
+import asyncio
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from typing import List
+from pypdf import PdfReader
 from dotenv import load_dotenv
 
-# Inject all configurations from your .env file
+# Import your database components
+from database import SessionLocal, JobEvaluationModel, init_db
+
 load_dotenv()
+init_db()
 
-app = FastAPI(title="Jobby.OS - Sandbox Module")
+app = FastAPI(title="Jobby.OS - Production Core Engine")
 
-# 1. SERVE THE HTML FRONTEND INTERFACE
+# 🔒 Touchpoint: Ensure full CORS parameters are open so the browser accepts data transmissions
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# 🏡 Serve Frontend Interface
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
     if not os.path.exists("index.html"):
@@ -17,48 +41,68 @@ def serve_dashboard():
     with open("index.html", "r", encoding="utf-8") as f:
         return f.read()
 
-# 2. SANDBOX MOCK SCOUT ENDPOINT 
-@app.post("/api/scout")
-async def mock_recruitment_scanner(keyword: str = Form(...), file: UploadFile = Form(...)):
+# 📋 Fetch historical records endpoint
+@app.get("/api/evaluations", response_model=List[dict])
+def list_stored_evaluations(db: Session = Depends(get_db)):
     try:
-        # Read the uploaded PDF out of memory streams
+        records = db.query(JobEvaluationModel).order_by(JobEvaluationModel.id.desc()).all()
+        return [{
+            "id": r.id,
+            "job_title": r.job_title,
+            "company_name": r.company_name,
+            "scraped_url": r.scraped_url,
+            "match_score": r.evaluation_data.get("match_score", 0) if isinstance(r.evaluation_data, dict) else 0,
+            "created_at": r.created_at.isoformat()
+        } for r in records]
+    except Exception as e:
+        print(f"Database list error: {e}")
+        return []
+
+# 📡 Active Pipeline Scout Endpoint
+@app.post("/api/scout")
+async def run_live_recruitment_scanner(
+    keyword: str = Form(...), 
+    file: UploadFile = File(...), 
+    db: Session = Depends(get_db)
+):
+    try:
         pdf_bytes = await file.read()
+        print("--------------------------------------------------")
+        print(f"📡 CORE PIPELINE ENGAGED!")
+        print(f"🔑 Keyword: {keyword} | File: {file.filename}")
         
-        # 🧪 TEST: Verify the file is loading correctly!
+        pdf_stream = io.BytesIO(pdf_bytes)
+        reader = PdfReader(pdf_stream)
+        cv_text = ""
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                cv_text += text + "\n"
+        
+        cv_text = cv_text.strip()
+        print(f"✅ Extracted: {len(cv_text)} characters.")
         print("--------------------------------------------------")
-        print(f"📡 API GATEWAY RECEIVED REQUEST!")
-        print(f"🔑 Search Keyword: {keyword}")
-        print(f"📄 Uploaded File Name: {file.filename}")
-        print(f"⚖️ File Size in Memory: {len(pdf_bytes)} bytes")
-        print("--------------------------------------------------")
 
-        # Simulate a 2-second processing delay so you can see the spinning animation
-        time.sleep(2)
+        # Mock delay to confirm execution lifecycle
+        await asyncio.sleep(1)
 
-        # Send back a mock JSON payload that matches what our React page expects to render
-        mock_jobs = [
-            {
-                "id": 1,
-                "title": f"Senior {keyword} Specialist",
-                "company": "Bolt (Mock Data)",
-                "location": "Tallinn, Estonia",
-                "match": 95,
-                "analysis": "🟢 Perfect match!\nYour uploaded document aligns beautifully with this mock role infrastructure."
-            },
-            {
-                "id": 2,
-                "title": f"Junior {keyword} Engineer",
-                "company": "Wise (Mock Data)",
-                "location": "Remote",
-                "match": 81,
-                "analysis": "🟡 Average Match.\nMissing explicit Python framework documentation within the uploaded resume core structural footprint."
-            }
-        ]
+        # Grab latest row entries from SQLite
+        results = db.query(JobEvaluationModel).order_by(JobEvaluationModel.id.desc()).all()
+        
+        formatted_jobs = []
+        for r in results:
+            formatted_jobs.append({
+                "id": r.id,
+                "title": r.job_title,
+                "company": r.company_name,
+                "match": r.evaluation_data.get("match_score", 0) if isinstance(r.evaluation_data, dict) else 0,
+                "analysis": r.evaluation_data.get("fit_analysis", "No raw analysis summary compiled.") if isinstance(r.evaluation_data, dict) else "No data."
+            })
 
-        return {"status": "success", "jobs": mock_jobs}
+        return {"status": "success", "jobs": formatted_jobs}
 
     except Exception as server_err:
-        print(f"🚨 Sandbox Error: {server_err}")
+        print(f"🚨 Pipeline Endpoint Failure: {server_err}")
         return {"status": "error", "message": str(server_err)}
 
 if __name__ == "__main__":
