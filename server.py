@@ -1,30 +1,30 @@
-import os
-import io
+import sys
 import asyncio
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
+
+# 🛠️ Fix Windows ProactorEventLoop compatibility issue with Playwright subprocesses
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+import re
+import json
+import time
+import asyncio
+from fastapi import FastAPI, Depends, UploadFile, Form, Query
 from fastapi.responses import HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List
+from playwright.async_api import async_playwright
+import io
+from fastapi import UploadFile
 from pypdf import PdfReader
-from dotenv import load_dotenv
 
-# Import your database components
 from database import SessionLocal, JobEvaluationModel, init_db
+from pipeline import JobPipeline
 
-load_dotenv()
+app = FastAPI()
+
+# Ensure fresh DB initialization on boot
 init_db()
-
-app = FastAPI(title="Jobby.OS - Production Core Engine")
-
-# 🔒 Touchpoint: Ensure full CORS parameters are open so the browser accepts data transmissions
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 def get_db():
     db = SessionLocal()
@@ -33,77 +33,84 @@ def get_db():
     finally:
         db.close()
 
-# 🏡 Serve Frontend Interface
+async def extract_text_from_pdf(file: UploadFile) -> str:
+    """
+    Reads an uploaded PDF file straight from the memory buffer 
+    and converts all pages into a single plain text string.
+    """
+    # Read raw bytes from the FastAPI memory buffer
+    file_bytes = await file.read()
+    await file.seek(0)  # Reset stream pointer
+    
+    # Load bytes into an in-memory binary stream
+    pdf_stream = io.BytesIO(file_bytes)
+    reader = PdfReader(pdf_stream)
+    
+    # Extract text from each page and combine
+    text_content = []
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text_content.append(page_text)
+            
+    return "\n".join(text_content).strip()
+
 @app.get("/", response_class=HTMLResponse)
-def serve_dashboard():
-    if not os.path.exists("index.html"):
-        raise HTTPException(status_code=404, detail="index.html file not found in directory.")
+def read_root():
     with open("index.html", "r", encoding="utf-8") as f:
-        return f.read()
+        return HTMLResponse(content=f.read())
 
-# 📋 Fetch historical records endpoint
-@app.get("/api/evaluations", response_model=List[dict])
-def list_stored_evaluations(db: Session = Depends(get_db)):
-    try:
-        records = db.query(JobEvaluationModel).order_by(JobEvaluationModel.id.desc()).all()
-        return [{
-            "id": r.id,
-            "job_title": r.job_title,
-            "company_name": r.company_name,
-            "scraped_url": r.scraped_url,
-            "match_score": r.evaluation_data.get("match_score", 0) if isinstance(r.evaluation_data, dict) else 0,
-            "created_at": r.created_at.isoformat()
-        } for r in records]
-    except Exception as e:
-        print(f"Database list error: {e}")
+# =====================================================================
+# API: Fetch Isolated Records
+# =====================================================================
+@app.get("/api/evaluations")
+def get_user_evaluations(client_id: str = Query(None), db: Session = Depends(get_db)):
+    if not client_id:
         return []
+    
+    records = db.query(JobEvaluationModel)\
+                .filter(JobEvaluationModel.user_id == client_id)\
+                .order_by(JobEvaluationModel.created_at.desc())\
+                .all()
+    
+    output = []
+    for r in records:
+        output.append({
+            "id": r.id, # Returns standard sequential ID (e.g. 1, 2, 3)
+            "job_title": r.job_title or "Position Profile",
+            "company_name": r.company_name or "Tech Enterprise",
+            "location": r.location or "Remote",
+            "match_score": r.match_score or 0,
+            "matching_skills": [s.strip() for s in r.matching_skills.split(",")] if r.matching_skills else [],
+            "absent_skills": [s.strip() for s in r.absent_skills.split(",")] if r.absent_skills else [],
+            "fit_analysis": r.fit_analysis or "",
+            "improvements": [line.strip() for line in r.improvements.split("\n") if line.strip()] if r.improvements else [],
+            "scraped_url": r.scraped_url or "#"
+        })
+    return output
 
-# 📡 Active Pipeline Scout Endpoint
+# =====================================================================
+# API: Run Scraper Pipeline & Process Loop
+# =====================================================================
 @app.post("/api/scout")
-async def run_live_recruitment_scanner(
-    keyword: str = Form(...), 
-    file: UploadFile = File(...), 
+async def process_scout_pipeline(
+    file: UploadFile,
+    keyword: str = Form(...),
+    client_id: str = Form(...),
     db: Session = Depends(get_db)
 ):
     try:
-        pdf_bytes = await file.read()
-        print("--------------------------------------------------")
-        print(f"📡 CORE PIPELINE ENGAGED!")
-        print(f"🔑 Keyword: {keyword} | File: {file.filename}")
+        print(f"⚡ Starting operational sequence for User: {client_id} -> Query: '{keyword}'")
         
-        pdf_stream = io.BytesIO(pdf_bytes)
-        reader = PdfReader(pdf_stream)
-        cv_text = ""
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                cv_text += text + "\n"
+        # 1. Read incoming uploaded CV dossier bytes
+        resume_text = await extract_text_from_pdf(file)
+        job = JobPipeline(client_iddd=client_id, cv_text=resume_text, search_keyword=keyword)
+
+        await job.run_pipeline()
         
-        cv_text = cv_text.strip()
-        print(f"✅ Extracted: {len(cv_text)} characters.")
-        print("--------------------------------------------------")
-
-        # Mock delay to confirm execution lifecycle
-        await asyncio.sleep(1)
-
-        # Grab latest row entries from SQLite
-        results = db.query(JobEvaluationModel).order_by(JobEvaluationModel.id.desc()).all()
-        
-        formatted_jobs = []
-        for r in results:
-            formatted_jobs.append({
-                "id": r.id,
-                "title": r.job_title,
-                "company": r.company_name,
-                "match": r.evaluation_data.get("match_score", 0) if isinstance(r.evaluation_data, dict) else 0,
-                "analysis": r.evaluation_data.get("fit_analysis", "No raw analysis summary compiled.") if isinstance(r.evaluation_data, dict) else "No data."
-            })
-
-        return {"status": "success", "jobs": formatted_jobs}
-
-    except Exception as server_err:
-        print(f"🚨 Pipeline Endpoint Failure: {server_err}")
-        return {"status": "error", "message": str(server_err)}
+    except Exception as e:
+        print(f"❌ Server Engine Exception: {e}")
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

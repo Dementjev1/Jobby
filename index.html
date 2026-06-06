@@ -44,6 +44,21 @@
             to { opacity: 1; transform: translateY(0); }
         }
         .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        
+        /* Custom scrollbar for beautiful dashboard aesthetics */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0d0e12;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #232836;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6366f1;
+        }
     </style>
 </head>
 <body>
@@ -55,6 +70,7 @@
         const ZapIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>;
         const BuildingIcon = () => <svg className="w-5 h-5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>;
         const SparklesIcon = () => <svg className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>;
+        const ExternalLinkIcon = () => <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>;
 
         function JobbyOS() {
             const [file, setFile] = React.useState(null);
@@ -63,23 +79,41 @@
             const [isScanning, setIsScanning] = React.useState(false);
             const [jobs, setJobs] = React.useState([]);
 
+            // 🧠 CLIENT SESSION IDENTIFIER GENERATOR
+            // Checks for or assigns a persistent client token key in browser local storage
+            const [clientId] = React.useState(() => {
+                let id = localStorage.getItem("jobby_client_id");
+                if (!id) {
+                    id = "usr_" + Math.random().toString(36).substring(2, 11) + Math.random().toString(36).substring(2, 11);
+                    localStorage.setItem("jobby_client_id", id);
+                }
+                return id;
+            });
+
+            // Fetch evaluations on page load (isolated by Client ID)
             React.useEffect(() => {
-                fetch("/api/evaluations")
+                fetch(`/api/evaluations?client_id=${clientId}`)
                     .then(res => res.json())
                     .then(data => {
                         if (Array.isArray(data)) {
+                            // 🛡️ Map database model outputs defensively
                             const mappedJobs = data.map(j => ({
                                 id: j.id || Math.random(),
-                                title: j.job_title || "Stored Position",
-                                company: j.company_name || "Database Record",
-                                match: j.match_score || 0,
-                                analysis: "Historical evaluation logged in datababy.db matrix architecture."
+                                job_title: j.job_title || "Stored Position",
+                                company_name: j.company_name || "Database Record",
+                                location: j.location || "Remote",
+                                match_score: j.match_score || 0,
+                                matching_skills: Array.isArray(j.matching_skills) ? j.matching_skills : [],
+                                absent_skills: Array.isArray(j.absent_skills) ? j.absent_skills : [],
+                                fit_analysis: j.fit_analysis || "Historical evaluation logged in SQLite.",
+                                improvements: Array.isArray(j.improvements) ? j.improvements : [],
+                                scraped_url: j.scraped_url || "#"
                             }));
                             setJobs(mappedJobs);
                         }
                     })
                     .catch(err => console.log("Initial load standby status: ", err));
-            }, []);
+            }, [clientId]);
 
             const handleFileChange = (e) => {
                 const targetFile = e.target.files?.[0];
@@ -97,6 +131,7 @@
                 const formData = new FormData();
                 formData.append("file", file);
                 formData.append("keyword", keyword);
+                formData.append("client_id", clientId); // 📡 Send active Client ID payload
 
                 try {
                     const response = await fetch("/api/scout", {
@@ -106,7 +141,20 @@
                     const data = await response.json();
                     
                     if (data.status === "success" && Array.isArray(data.jobs)) {
-                        setJobs(data.jobs);
+                        // 🛡️ Map scout endpoint results defensively
+                        const mappedScouts = data.jobs.map(j => ({
+                            id: j.id || Math.random(),
+                            job_title: j.title || "Position Profile",
+                            company_name: j.company || "Tech Enterprise",
+                            location: j.location || "Remote",
+                            match_score: j.match_score || 0,
+                            matching_skills: Array.isArray(j.matching_skills) ? j.matching_skills : [],
+                            absent_skills: Array.isArray(j.absent_skills) ? j.absent_skills : [],
+                            fit_analysis: j.fit_analysis || "Evaluation processed.",
+                            improvements: Array.isArray(j.improvements) ? j.improvements : [],
+                            scraped_url: j.scraped_url || "#"
+                        }));
+                        setJobs(mappedScouts);
                     } else {
                         alert("Pipeline notification: " + (data.message || "Invalid payload format returned."));
                     }
@@ -118,13 +166,13 @@
             };
 
             const avgMatch = jobs.length > 0 
-                ? Math.round(jobs.reduce((acc, j) => acc + parseInt(j.match || 0), 0) / jobs.length) 
+                ? Math.round(jobs.reduce((acc, j) => acc + parseInt(j.match_score || 0), 0) / jobs.length) 
                 : 0;
 
             return (
                 <div className="min-h-screen bg-background text-foreground flex h-screen overflow-hidden">
                     {/* Sidebar Control Deck */}
-                    <aside className="w-72 border-r border-border bg-sidebar p-6 flex flex-col justify-between">
+                    <aside className="w-72 border-r border-border bg-sidebar p-6 flex flex-col justify-between shrink-0">
                         <div className="space-y-6">
                             <div>
                                 <h1 className="text-xl font-semibold tracking-tight text-foreground flex items-center gap-2">
@@ -132,6 +180,12 @@
                                     <span className="text-muted-foreground font-heading">.OS</span>
                                 </h1>
                                 <p className="text-xs text-muted-foreground mt-1">AI Automation Subsystem</p>
+                                
+                                {/* 📡 Active Session Display badge */}
+                                <div className="mt-3 p-2 bg-background border border-border/60 rounded flex flex-col gap-0.5">
+                                    <span className="text-[9px] font-bold text-primary tracking-widest uppercase">Client Terminal</span>
+                                    <span className="text-[10px] font-mono text-gray-300 select-all truncate" title={clientId}>{clientId}</span>
+                                </div>
                             </div>
 
                             {/* File Dropper */}
@@ -202,15 +256,18 @@
                     </aside>
 
                     {/* Operational Viewport Workspace */}
-                    <main className="flex-1 p-8 overflow-y-auto bg-background">
-                        <div className="max-w-5xl mx-auto">
-                            <div className="mb-8">
-                                <h2 className="text-md font-medium text-foreground tracking-wide uppercase">System Monitoring Interface</h2>
-                                <p className="text-xs text-muted-foreground mt-0.5">
-                                    {jobs.length > 0
-                                        ? `Displaying ${jobs.length} relational matrix profiles compiled from SQLite storage layer`
-                                        : "Terminal online. Feed tracking parameters into control components to execute analytics."}
-                                </p>
+                    <main className="flex-1 p-8 overflow-y-auto bg-background h-screen">
+                        <div className="max-w-6xl mx-auto">
+                            
+                            {/* Header Dashboard Metrics Context */}
+                            <div className="mb-6 flex justify-between items-center border-b border-border/40 pb-4">
+                                <div>
+                                    <h2 className="text-xl font-bold tracking-tight text-white font-heading">Job Matches</h2>
+                                    <p className="text-sm text-muted-foreground mt-0.5">Displaying {jobs.length} 8-parameter analytic records from SQLite</p>
+                                </div>
+                                <div className="text-xs font-mono px-3 py-1 bg-sidebar border border-border rounded text-primary font-bold">
+                                    9-PARAM ARCHITECTURE ACTIVE
+                                </div>
                             </div>
 
                             {jobs.length === 0 && !isScanning ? (
@@ -219,38 +276,113 @@
                                     <p className="text-muted-foreground text-xs mt-2 tracking-widest uppercase">Subsystems Idle</p>
                                 </div>
                             ) : (
-                                <div className="grid gap-4 md:grid-cols-2">
-                                    {jobs.map((job, idx) => (
-                                        <div
-                                            key={job.id}
-                                            className="bg-card border border-border rounded-xl p-5 hover:border-primary/40 transition-all duration-300 animate-fade-in"
-                                            style={{ animationDelay: `${idx * 50}ms` }}
-                                        >
-                                            <div className="flex items-start justify-between mb-3">
-                                                <div className="flex items-center gap-3 min-w-0">
-                                                    <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center shrink-0">
-                                                        <BuildingIcon />
+                                /* Balanced Responsive Grid Layout */
+                                <div className="grid gap-6 md:grid-cols-1 xl:grid-cols-2 items-start pb-12">
+                                    {jobs.map((job) => {
+                                        const score = parseInt(job.match_score || 0);
+                                        const scoreColor = score >= 80 
+                                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" 
+                                            : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+
+                                        // Ensure variables are arrays safely
+                                        const matchingSkills = Array.isArray(job.matching_skills) ? job.matching_skills : [];
+                                        const absentSkills = Array.isArray(job.absent_skills) ? job.absent_skills : [];
+                                        const improvements = Array.isArray(job.improvements) ? job.improvements : [];
+
+                                        return (
+                                            <div key={job.id} className="bg-[#14161f] border border-[#222530] rounded-xl p-6 transition-all duration-200 space-y-5">
+                                                
+                                                {/* Card Identity Header Row */}
+                                                <div className="flex items-start justify-between gap-4">
+                                                    <div className="flex items-center gap-3.5 min-w-0">
+                                                        <div className="w-10 h-10 rounded-lg bg-[#1c1e29] flex items-center justify-center shrink-0 border border-border/60">
+                                                            <BuildingIcon />
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            <h3 className="font-semibold text-gray-100 text-sm tracking-wide truncate">{job.job_title}</h3>
+                                                            <p className="text-xs text-gray-400 font-medium mt-0.5 truncate">{job.company_name}</p>
+                                                        </div>
                                                     </div>
-                                                    <div className="min-w-0">
-                                                        <h3 className="font-medium text-foreground text-xs truncate">{job.title}</h3>
-                                                        <p className="text-[11px] text-muted-foreground truncate">{job.company}</p>
+                                                    <span className={`text-xs font-mono font-bold px-2.5 py-0.5 rounded border ${scoreColor} shrink-0`}>
+                                                        {score}% MATCH
+                                                    </span>
+                                                </div>
+
+                                                {/* Geographical Location Row with Original Spec URL Option */}
+                                                <div className="flex items-center justify-between text-[11px] font-medium ml-1">
+                                                    <div className="flex items-center gap-1.5 text-gray-500">
+                                                        <svg className="w-3.5 h-3.5 text-gray-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                                        </svg>
+                                                        <span>{job.location}</span>
+                                                    </div>
+                                                    
+                                                    {job.scraped_url && job.scraped_url !== "#" && (
+                                                        <a 
+                                                            href={job.scraped_url} 
+                                                            target="_blank" 
+                                                            rel="noopener noreferrer" 
+                                                            className="flex items-center gap-1 text-primary hover:text-primary/80 transition-colors"
+                                                        >
+                                                            <ExternalLinkIcon />
+                                                            <span>Original Job Spec</span>
+                                                        </a>
+                                                    )}
+                                                </div>
+
+                                                {/* Skills Section: Green Verification Badges vs Amber Gaps */}
+                                                <div className="grid grid-cols-2 gap-4 bg-[#0d0e12]/40 p-3 rounded-lg border border-border/30">
+                                                    <div className="space-y-1.5">
+                                                        <div className="text-[10px] font-bold tracking-wider text-emerald-400 uppercase">Matched Core</div>
+                                                        <div className="flex flex-wrap gap-1">
+                                                            {matchingSkills.length > 0 ? matchingSkills.map((s, idx) => (
+                                                                <span key={idx} className="px-1.5 py-0.5 bg-emerald-500/5 border border-emerald-500/10 text-emerald-400 text-[9px] font-mono rounded uppercase">
+                                                                    {s}
+                                                                </span>
+                                                            )) : <span className="text-[10px] text-gray-600 italic">None logged</span>}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-1.5">
+                                                        <div className="text-[10px] font-bold tracking-wider text-amber-400 uppercase">Delta Gaps</div>
+                                                        <div className="flex flex-wrap gap-1">
+                                                            {absentSkills.length > 0 ? absentSkills.map((s, idx) => (
+                                                                <span key={idx} className="px-1.5 py-0.5 bg-amber-500/5 border border-amber-500/10 text-amber-400 text-[9px] font-mono rounded uppercase">
+                                                                    {s}
+                                                                </span>
+                                                            )) : <span className="text-[10px] text-gray-600 italic">None logged</span>}
+                                                        </div>
                                                     </div>
                                                 </div>
-                                                <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 shrink-0">
-                                                    {job.match}%
-                                                </span>
-                                            </div>
 
-                                            <div className="pt-3 border-t border-border">
-                                                <div className="flex items-start gap-2">
-                                                    <SparklesIcon />
-                                                    <p className="text-[11px] text-muted-foreground leading-relaxed whitespace-pre-line">
-                                                        {job.analysis}
+                                                {/* Narrative Fit Assessment Paragraph */}
+                                                <div className="space-y-1">
+                                                    <div className="text-[10px] font-bold tracking-widest text-primary uppercase flex items-center gap-1.5">
+                                                        <SparklesIcon /> AI Fit Assessment
+                                                    </div>
+                                                    <p className="text-xs text-gray-300 leading-relaxed font-sans bg-[#0d0e12] p-3.5 rounded border border-border/30">
+                                                        {job.fit_analysis}
                                                     </p>
                                                 </div>
+
+                                                {/* Strategic Improvements Checklist Footer */}
+                                                {improvements.length > 0 && (
+                                                    <div className="pt-3.5 border-t border-[#1e212b] space-y-1.5">
+                                                        <div className="text-[10px] font-bold tracking-widest text-amber-400 uppercase">Actionable Profile Adjustments</div>
+                                                        <div className="space-y-1.5">
+                                                            {improvements.map((bullet, idx) => (
+                                                                <div key={idx} className="flex items-start gap-2 text-xs text-gray-400 font-sans">
+                                                                    <span className="text-primary font-mono select-none font-bold mt-0.5">→</span>
+                                                                    <p className="leading-relaxed">{bullet}</p>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
                                             </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>

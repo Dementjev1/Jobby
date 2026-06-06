@@ -9,13 +9,15 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.document_loaders import PyPDFLoader
 
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 import agentql
 import os
 import re
 import pandas as pd
 import random
 import json
+
+from playwright.sync_api import sync_playwright
 
 from tools.prompts import compare_cv_job
 from database import SessionLocal, JobEvaluationModel, init_db
@@ -26,7 +28,8 @@ load_dotenv()
 
 # Define the function as an official LangChain tool
 class JobPipeline:
-    def __init__(self, cv_text: str, search_keyword: str):
+    def __init__(self, client_iddd: str, cv_text: str, search_keyword: str):
+        self.client_id = client_iddd
         self.cv_doc = cv_text
         self.search_keyword = search_keyword
         self.url = f"https://www.linkedin.com/jobs/search?keywords={self.search_keyword}&location=Tallinn"
@@ -75,14 +78,15 @@ class JobPipeline:
                 page.mouse.click(bottom_right_x, bottom_right_y)
                 page.wait_for_timeout(rdm())  # Wait for 2 seconds to ensure the page has loaded after the click
 
-                for _ in range(4):
-                    page.mouse.wheel(0, 1000)
-                    page.wait_for_timeout(500)
+                for _ in range(3):
+                    page.mouse.wheel(0, 500)
+                    page.wait_for_timeout(1000)
 
                 count = 0
-                limit = 4
+                limit = 8
 
                 job_cards = page.locator("ul.jobs-search__results-list a.base-card__full-link").all()
+                print(f"Found {len(job_cards)} job cards on the page.")
 
                 for lk in job_cards:
                     if count >= limit:
@@ -157,7 +161,7 @@ class JobPipeline:
                         print(f"✅ Successfully scraped index [{title}]")
                             
                             # Save to your tracked history
-                        job_dct[title] = full_description_text
+                        job_dct[title] = (full_description_text, target_url)
                         
 
                     except Exception as e:
@@ -196,28 +200,19 @@ class JobPipeline:
         
         # 3. Extract output string safely handling either standard strings or structure blocks
         last_msg = response['messages'][-1]
+
+
         if isinstance(last_msg.content, list):
             raw_content = last_msg.content[0].get('text', str(last_msg.content[0]))
         else:
             raw_content = str(last_msg.content)
-
-        # 4. 🛠️ NEW: Clean and Parse the JSON payload safely
-        try:
-            # Strip out markdown code blocks (```json ... ```) if the model accidentally includes them
-            clean_json_str = re.sub(r"^```json|```$", "", raw_content.strip(), flags=re.MULTILINE).strip()
             
-            # Convert string to a native Python dictionary
-            evaluation_dict = json.loads(clean_json_str)
-            return evaluation_dict
-
-        except json.JSONDecodeError as e:
-            print(f"🚨 Failed to parse AI response into JSON for job '{title}': {e}")
-            print(f"Raw response was: {raw_content}")
-            return None
+        # Just return the raw text block exactly as the AI provided it!
+        return raw_content
         
     
 
-    def run_pipeline(self):
+    async def run_pipeline(self):
         
         self.job_scrapper()
         
@@ -229,46 +224,72 @@ class JobPipeline:
         agent = create_agent(
             model=llm,
             system_prompt=self.prompt
-        )
-
-        for title, desc in self.results.items():
-            evaluation_dict = self.evaluate_job_fit(agent, title, desc)
-            print(f"Evaluation for {title} done")
-            db = SessionLocal()
+                )
+        for title, (desc, url) in self.results.items():
+            # 1. Fetch the raw, unparsed string text from your AI agent function
+            raw_ai_string = self.evaluate_job_fit(agent, title, desc)
+            print(f"Evaluation text retrieved for {title}")
             
+            db = SessionLocal()
             try:
-                # Extract metadata from the AI payload with safe fallbacks
-                extracted_title = evaluation_dict.get("job_title", "Unknown Position")
-                extracted_company = evaluation_dict.get("company_name", "Unknown Company")
+                # 2. Clean the markdown wrappers and parse the JSON text into a Python dict
+                clean_json_str = re.sub(r"^```json|```$", "", raw_ai_string.strip(), flags=re.MULTILINE).strip()
+                data = json.loads(clean_json_str)
 
+                # 3. Pull top-level fields with safe fallbacks
+                extracted_title = data.get("job_title", title)
+                extracted_company = data.get("company_name", "Unknown Company")
+                extracted_location = data.get("location", "Remote")
+                
+                try:
+                    extracted_score = int(data.get("match_score", 50))
+                except (ValueError, TypeError):
+                    extracted_score = 50
 
+                # 4. 🛡️ DATA SHAPE DEFENSE
+                # Convert arrays to flat strings just in case the AI ignores instructions
+                raw_matching = data.get("matching_skills", "")
+                matching_skills_str = ", ".join([str(x).strip() for x in raw_matching if x]) if isinstance(raw_matching, list) else str(raw_matching)
+
+                raw_absent = data.get("absent_skills", "")
+                absent_skills_str = ", ".join([str(x).strip() for x in raw_absent if x]) if isinstance(raw_absent, list) else str(raw_absent)
+
+                raw_improvements = data.get("improvements", "")
+                improvements_str = "\n".join([str(x).strip() for x in raw_improvements if x]) if isinstance(raw_improvements, list) else str(raw_improvements)
+
+                # 5. Check database state to protect against identical entries (Duplicates)
                 existing_record = db.query(JobEvaluationModel).filter(
-                    JobEvaluationModel.job_title == extracted_title,
-                    JobEvaluationModel.company_name == extracted_company).first()
+                    JobEvaluationModel.scraped_url == url).first()
                 
                 if existing_record:
                     print(f"⏭️ [SKIP] '{extracted_title}' at '{extracted_company}' already exists in database. Skipping duplicate entry.")
-                    return False
+                    continue  # Move onto the next job description in the results dict
                 
-                # Build the table row object
+                # 6. Map elements to the 8 clean, flat database columns
                 new_record = JobEvaluationModel(
+                    user_id=self.client_id,
+                    search_keyword=self.search_keyword,
                     job_title=extracted_title,
                     company_name=extracted_company,
-                    evaluation_data=evaluation_dict # 👈 Just hand the dictionary over directly!
+                    location=extracted_location,
+                    match_score=extracted_score,
+                    matching_skills=matching_skills_str,
+                    absent_skills=absent_skills_str,
+                    fit_analysis=data.get("fit_analysis", ""),
+                    improvements=improvements_str,
+                    scraped_url=url  # Map your active scraper URL state parameter here
                 )
                 
-                # Commit the data package to the SQLite file
+                # 7. Commit permanently to SQLite storage
                 db.add(new_record)
                 db.commit()
                 print(f"💾 [SUCCESS] Safely loaded and indexed: {extracted_title} at {extracted_company}")
                 
-
+            except json.JSONDecodeError as json_err:
+                print(f"🚨 [JSON FORMAT ERROR] AI outputted unparsable formatting: {json_err}")
+                print(f"Raw context block was:\n{raw_ai_string}")
             except Exception as e:
-                db.rollback() # Safely roll back the session if there's a duplicate URL or corruption
-                print(f"❌ [DATABASE ERROR] Failed to load JSON data block into SQLite: {e}")
-                
-                
+                db.rollback()
+                print(f"❌ [DATABASE ERROR] Failed to process flat record layout: {e}")
             finally:
                 db.close()
-
-        

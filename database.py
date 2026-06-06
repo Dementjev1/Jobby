@@ -1,29 +1,35 @@
 import datetime
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON
+from sqlalchemy import Column, String, Integer, Text, DateTime, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# 1. Target your local file on the Pi 5 and apply the 30-second concurrency fix
-DATABASE_URL = "sqlite:///datababy.db"
-engine = create_engine(DATABASE_URL, connect_args={"timeout": 30, "check_same_thread": False})
+DATABASE_URL = "sqlite:///./datababy_v4.db"
 
-# 2. Create the session maker tool
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# 3. Define the database table map
 class JobEvaluationModel(Base):
-    __tablename__ = 'job_evaluations'
+    __tablename__ = "job_evaluations"
 
-    id = Column(Integer, primary_key=True, index=True)
-    job_title = Column(String, nullable=False)
-    company_name = Column(String, nullable=False)
+    # 🔑 Standard auto-incrementing integer index key
+    id = Column(Integer, primary_key=True, autoincrement=True)
     
-    # 🧠 SQLAlchemy automatically translates Python dictionaries into SQLite text strings
-    evaluation_data = Column(JSON, nullable=False) 
+    # 📡 User Isolation & Tracking
+    user_id = Column(String, nullable=False, index=True)
+    search_keyword = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
-    created_at = Column(DateTime, default=datetime.datetime.now().date())
+    # Data Columns
+    job_title = Column(String, nullable=True)
+    company_name = Column(String, nullable=True)
+    location = Column(String, default="Remote")
+    match_score = Column(Integer, default=50)
+    matching_skills = Column(Text, default="")  
+    absent_skills = Column(Text, default="")    
+    fit_analysis = Column(Text, default="")
+    improvements = Column(Text, default="")
+    scraped_url = Column(String, default="#")
 
-# 4. Helper function to spin up the database file automatically if it's missing
 def init_db():
     Base.metadata.create_all(bind=engine)
