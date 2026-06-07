@@ -1,3 +1,4 @@
+import multiprocessing
 from unittest import loader
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -16,6 +17,7 @@ import re
 import pandas as pd
 import random
 import json
+import asyncio
 
 from playwright.sync_api import sync_playwright
 
@@ -171,6 +173,7 @@ class JobPipeline:
                         # Destroy this environment entirely before moving to the next item
                         clean_context.close()
                 self.results = job_dct
+                return True
 
     def evaluate_job_fit(self, agent, title: str, description: str) -> dict | None:
         """
@@ -214,7 +217,12 @@ class JobPipeline:
 
     async def run_pipeline(self):
         
-        self.job_scrapper()
+        p = multiprocessing.Process(target=self.job_scrapper)
+        p.start()
+        
+        # Use an executor to wait for the process to finish
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, p.join)
         
         init_db()
 
@@ -293,3 +301,4 @@ class JobPipeline:
                 print(f"❌ [DATABASE ERROR] Failed to process flat record layout: {e}")
             finally:
                 db.close()
+        return True

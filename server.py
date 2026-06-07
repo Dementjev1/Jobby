@@ -1,5 +1,6 @@
 import sys
 import asyncio
+import multiprocessing
 
 # 🛠️ Fix Windows ProactorEventLoop compatibility issue with Playwright subprocesses
 if sys.platform == 'win32':
@@ -103,15 +104,21 @@ async def process_scout_pipeline(
         print(f"⚡ Starting operational sequence for User: {client_id} -> Query: '{keyword}'")
         
         # 1. Read incoming uploaded CV dossier bytes
+
         resume_text = await extract_text_from_pdf(file)
         job = JobPipeline(client_iddd=client_id, cv_text=resume_text, search_keyword=keyword)
 
         await job.run_pipeline()
+
+        return {'status': 'completed', 'message': 'Job processing completed successfully.'}
         
     except Exception as e:
         print(f"❌ Server Engine Exception: {e}")
         return {"status": "error", "message": str(e)}
 
+# server.py
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=True)
+    # Use 'spawn' to avoid issues with inherited event loops on Windows
+    multiprocessing.set_start_method('spawn', force=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
