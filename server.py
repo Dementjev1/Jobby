@@ -1,32 +1,31 @@
 import sys
-import asyncio
-import multiprocessing
+import io
+import uvicorn
+from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 
-# 🛠️ Fix Windows ProactorEventLoop compatibility issue with Playwright subprocesses
-if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-
-import re
-import json
-import time
-import asyncio
 from fastapi import FastAPI, Depends, UploadFile, Form, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-from playwright.async_api import async_playwright
-import io
-from fastapi import UploadFile
 from pypdf import PdfReader
 
+# Your project imports
 from database import SessionLocal, JobEvaluationModel, init_db
 from pipeline import JobPipeline
 
-app = FastAPI()
+# 1. Define the lifespan context manager (The "modern" way to manage startup/shutdown)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize the executor
+    app.state.executor = ThreadPoolExecutor(max_workers=3)
+    init_db()  # Initialize DB here
+    yield
+    # Shutdown: Cleanly stop the executor
+    app.state.executor.shutdown(wait=True)
 
-# Ensure fresh DB initialization on boot
-init_db()
+app = FastAPI(lifespan=lifespan)
 
+# Helper function
 def get_db():
     db = SessionLocal()
     try:
@@ -35,25 +34,11 @@ def get_db():
         db.close()
 
 async def extract_text_from_pdf(file: UploadFile) -> str:
-    """
-    Reads an uploaded PDF file straight from the memory buffer 
-    and converts all pages into a single plain text string.
-    """
-    # Read raw bytes from the FastAPI memory buffer
     file_bytes = await file.read()
-    await file.seek(0)  # Reset stream pointer
-    
-    # Load bytes into an in-memory binary stream
+    await file.seek(0)
     pdf_stream = io.BytesIO(file_bytes)
     reader = PdfReader(pdf_stream)
-    
-    # Extract text from each page and combine
-    text_content = []
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text_content.append(page_text)
-            
+    text_content = [page.extract_text() for page in reader.pages if page.extract_text()]
     return "\n".join(text_content).strip()
 
 @app.get("/", response_class=HTMLResponse)
@@ -61,19 +46,13 @@ def read_root():
     with open("index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
-# =====================================================================
-# API: Fetch Isolated Records
-# =====================================================================
 @app.get("/api/evaluations")
 def get_user_evaluations(client_id: str = Query(None), db: Session = Depends(get_db)):
     if not client_id:
         return []
-    
-    records = db.query(JobEvaluationModel)\
-                .filter(JobEvaluationModel.user_id == client_id)\
-                .order_by(JobEvaluationModel.created_at.desc())\
-                .all()
-    
+    records = db.query(JobEvaluationModel).filter(JobEvaluationModel.user_id == client_id).order_by(JobEvaluationModel.created_at.desc()).all()
+
+
     output = []
     for r in records:
         output.append({
@@ -101,14 +80,14 @@ async def process_scout_pipeline(
     db: Session = Depends(get_db)
 ):
     try:
-        print(f"⚡ Starting operational sequence for User: {client_id} -> Query: '{keyword}'")
-        
-        # 1. Read incoming uploaded CV dossier bytes
-
+        print(f"⚡ Starting operational sequence for User: {client_id}")
         resume_text = await extract_text_from_pdf(file)
+        
+        # Instantiate pipeline
         job = JobPipeline(client_iddd=client_id, cv_text=resume_text, search_keyword=keyword)
 
-        await job.run_pipeline()
+        # ACCESS EXECUTOR FROM app.state
+        await job.run_pipeline(app.state.executor)
 
         return {'status': 'completed', 'message': 'Job processing completed successfully.'}
         
@@ -116,9 +95,5 @@ async def process_scout_pipeline(
         print(f"❌ Server Engine Exception: {e}")
         return {"status": "error", "message": str(e)}
 
-# server.py
 if __name__ == "__main__":
-    import uvicorn
-    # Use 'spawn' to avoid issues with inherited event loops on Windows
-    multiprocessing.set_start_method('spawn', force=True)
     uvicorn.run(app, host="0.0.0.0", port=8000)

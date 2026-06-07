@@ -131,7 +131,7 @@
                 const formData = new FormData();
                 formData.append("file", file);
                 formData.append("keyword", keyword);
-                formData.append("client_id", clientId); // 📡 Send active Client ID payload
+                formData.append("client_id", clientId); 
 
                 try {
                     const response = await fetch("/api/scout", {
@@ -140,21 +140,16 @@
                     });
                     const data = await response.json();
                     
-                    if (data.status === "success" && Array.isArray(data.jobs)) {
-                        // 🛡️ Map scout endpoint results defensively
-                        const mappedScouts = data.jobs.map(j => ({
-                            id: j.id || Math.random(),
-                            job_title: j.title || "Position Profile",
-                            company_name: j.company || "Tech Enterprise",
-                            location: j.location || "Remote",
-                            match_score: j.match_score || 0,
-                            matching_skills: Array.isArray(j.matching_skills) ? j.matching_skills : [],
-                            absent_skills: Array.isArray(j.absent_skills) ? j.absent_skills : [],
-                            fit_analysis: j.fit_analysis || "Evaluation processed.",
-                            improvements: Array.isArray(j.improvements) ? j.improvements : [],
-                            scraped_url: j.scraped_url || "#"
-                        }));
-                        setJobs(mappedScouts);
+                    if (data.status === "completed" || data.status === "success") {
+                        // SUCCESS: Automatically fetch the fresh data from the DB
+                        // This replaces the need to refresh the page manually
+                        const refreshResponse = await fetch(`/api/evaluations?client_id=${clientId}`);
+                        const freshData = await refreshResponse.json();
+                        
+                        // Map the fresh data just like you do on initial load
+                        if (Array.isArray(freshData)) {
+                            setJobs(freshData);
+                        }
                     } else {
                         alert("Pipeline notification: " + (data.message || "Invalid payload format returned."));
                     }

@@ -10,7 +10,6 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.document_loaders import PyPDFLoader
 
-from playwright.async_api import async_playwright
 import agentql
 import os
 import re
@@ -215,14 +214,11 @@ class JobPipeline:
         
     
 
-    async def run_pipeline(self):
-        
-        p = multiprocessing.Process(target=self.job_scrapper)
-        p.start()
-        
+    async def run_pipeline(self, executor):
+        import asyncio
         # Use an executor to wait for the process to finish
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, p.join)
+        await loop.run_in_executor(executor , self.job_scrapper)
         
         init_db()
 
