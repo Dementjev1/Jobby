@@ -84,7 +84,7 @@ class JobPipeline:
                     page.wait_for_timeout(1000)
 
                 count = 0
-                limit = 8
+                limit = 30
 
                 job_cards = page.locator("ul.jobs-search__results-list a.base-card__full-link").all()
                 print(f"Found {len(job_cards)} job cards on the page.")
